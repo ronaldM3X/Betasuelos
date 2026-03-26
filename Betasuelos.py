@@ -11,7 +11,7 @@ st.sidebar.title("👨‍🏫 Panel de Control")
 modo = st.sidebar.radio("Selecciona el Modo:", ("Metas (Laboratorio)", "Académico (Base Vs=1)"))
 st.sidebar.markdown("---")
 
-st.title(f"🏗️ Geotecnia Master - Modo {modo.split()[0]}")
+st.title(f"🏗️ Anderson Hernández-Geotecnia - Modo {modo.split()[0]}")
 
 # --- PESTAÑAS ---
 tabs = st.tabs(["🧩 Gravimetría & Fases", "📥 Reporte Final"])
