@@ -2,16 +2,24 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import numpy as np
-import io
 
 # 1. CONFIGURACIÓN
-st.set_page_config(page_title="Anderson Hernández- Gravimetria", layout="wide", page_icon="🏗️")
+st.set_page_config(page_title="Anderson Hernández - Geotecnia", layout="wide", page_icon="🏗️")
+
+# Estilo personalizado para un look más profesional
+st.markdown("""
+    <style>
+    .main { background-color: #f5f7f9; }
+    .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #2e7d32; color: white; }
+    </style>
+    """, unsafe_allow_html=True)
 
 st.sidebar.title("👨‍🏫 Panel de Control")
-modo = st.sidebar.radio("Selecciona el Modo:", ("Metas (Laboratorio)", "Académico (Base Vs=1)"))
+# Se eliminó la selección de modos anteriores
+st.sidebar.info("Modo activo: **Datos (Laboratorio)**")
 st.sidebar.markdown("---")
 
-st.title(f"🏗️ Anderson Hernández-Geotecnia - Modo {modo.split()[0]}")
+st.title("🏗️ Anderson Hernández - Geotecnia")
 
 # --- PESTAÑAS ---
 tabs = st.tabs(["🧩 Gravimetría & Fases", "📥 Reporte Final"])
@@ -26,111 +34,68 @@ with tabs[0]:
         "va": "Va (Volumen aire)", "gh": "γ (Unitario húmedo)", "gd": "γd (Unitario seco)"
     }
 
-    st.subheader("📥 1. Entrada de Datos Iniciales")
-    seleccionados = st.multiselect("Variables conocidas:", options=list(diccionario_maestro.keys()), format_func=lambda x: diccionario_maestro[x])
+    st.subheader("📥 1. Entrada de Datos")
+    seleccionados = st.multiselect(
+        "Selecciona las variables conocidas para iniciar el cálculo:", 
+        options=list(diccionario_maestro.keys()), 
+        format_func=lambda x: diccionario_maestro[x]
+    )
     
     inputs = {}
     cols_in = st.columns(3)
     for i, clave in enumerate(seleccionados):
         inputs[clave] = cols_in[i%3].number_input(f"{diccionario_maestro[clave]}", value=0.0, format="%.4f", key=f"in_{clave}")
 
-    if st.button("🚀 Calcular Base"):
+    if st.button("🚀 Calcular Propiedades"):
+        # Validación de datos mínimos para magnitudes reales
         tiene_peso = any(k in inputs and inputs[k] > 0 for k in ['ws', 'wm', 'ww'])
         tiene_volumen = any(k in inputs and inputs[k] > 0 for k in ['vs', 'vt', 'vv', 'vw', 'va'])
         
-        if modo == "Metas (Laboratorio)" and not (tiene_peso or tiene_volumen):
-            st.error("❌ Datos insuficientes para magnitudes reales. Por favor, ingresa al menos un Peso o un Volumen.")
+        if not (tiene_peso or tiene_volumen):
+            st.error("❌ Para este modo es necesario ingresar al menos un dato de **Peso** o **Volumen** real.")
             st.stop()
 
         d = {k: 0.0 for k in diccionario_maestro.keys()}
-        if modo == "Académico (Base Vs=1)": d['vs'] = 1.0
         
+        # Ajuste de porcentajes
         for k, v in inputs.items():
             d[k] = v / 100 if k in ['w', 'n', 's'] and v > 1.0 else v
         
-        # MOTOR DE INFERENCIA COMPLETO CON RETROALIMENTACIÓN
+        # MOTOR DE INFERENCIA (Iterativo para resolver dependencias circulares)
         for _ in range(100):
-            # ── Fase 1: Gs, Ws, Vs (triángulo fundamental) ──────────────────
+            # Fase 1: Gs, Ws, Vs
             if d['gs'] > 0 and d['ws'] > 0 and d['vs'] == 0: d['vs'] = d['ws'] / d['gs']
             if d['gs'] > 0 and d['vs'] > 0 and d['ws'] == 0: d['ws'] = d['gs'] * d['vs']
             if d['ws'] > 0 and d['vs'] > 0 and d['gs'] == 0: d['gs'] = d['ws'] / d['vs']
 
-            # ── Fase 2: Relación e ↔ Vv, Vs ─────────────────────────────────
+            # Fase 2: Relaciones volumétricas
             if d['vv'] > 0 and d['vs'] > 0 and d['e'] == 0:  d['e'] = d['vv'] / d['vs']
             if d['e']  > 0 and d['vs'] > 0 and d['vv'] == 0: d['vv'] = d['e'] * d['vs']
-            if d['e']  > 0 and d['vv'] > 0 and d['vs'] == 0: d['vs'] = d['vv'] / d['e']
-
-            # ── Fase 3: Porosidad n ↔ e, Vt, Vv, Vs ─────────────────────────
-            if d['e'] > 0 and d['n'] == 0:
-                d['n'] = d['e'] / (1 + d['e'])
-            if 0 < d['n'] < 1 and d['e'] == 0:
-                d['e'] = d['n'] / (1 - d['n'])
-            if d['n'] > 0 and d['vt'] > 0 and d['vv'] == 0:
-                d['vv'] = d['n'] * d['vt']
-            if d['n'] > 0 and d['vt'] > 0 and d['vs'] == 0:
-                d['vs'] = (1 - d['n']) * d['vt']
-            if d['n'] > 0 and d['vs'] > 0 and d['vt'] == 0:
-                d['vt'] = d['vs'] / (1 - d['n'])
-            if d['n'] > 0 and d['vv'] > 0 and d['vt'] == 0:
-                d['vt'] = d['vv'] / d['n']
-            if d['vt'] > 0 and d['vv'] > 0 and d['n'] == 0:
-                d['n'] = d['vv'] / d['vt']
-
-            # ── Fase 4: Volumen total Vt = Vs + Vv ───────────────────────────
+            
+            # Fase 3: Porosidad
+            if d['e'] > 0 and d['n'] == 0: d['n'] = d['e'] / (1 + d['e'])
+            if 0 < d['n'] < 1 and d['e'] == 0: d['e'] = d['n'] / (1 - d['n'])
+            
+            # Fase 4: Volúmenes Totales
             if d['vt'] > 0 and d['vs'] > 0 and d['vv'] == 0: d['vv'] = d['vt'] - d['vs']
-            if d['vt'] > 0 and d['vv'] > 0 and d['vs'] == 0: d['vs'] = d['vt'] - d['vv']
             if d['vs'] > 0 and d['vv'] > 0 and d['vt'] == 0: d['vt'] = d['vs'] + d['vv']
 
-            # ── Fase 5: Humedad w, Ww, Ws ────────────────────────────────────
+            # Fase 5: Humedad y Pesos
             if d['ws'] > 0 and d['w']  > 0 and d['ww'] == 0: d['ww'] = d['ws'] * d['w']
             if d['ws'] > 0 and d['ww'] > 0 and d['w']  == 0: d['w']  = d['ww'] / d['ws']
-            if d['w']  > 0 and d['ww'] > 0 and d['ws'] == 0: d['ws'] = d['ww'] / d['w']
+            if d['ww'] > 0 and d['vw'] == 0: d['vw'] = d['ww'] # Densidad agua = 1
 
-            # ── Fase 6: Vw = Ww (densidad agua = 1 g/cm³) ───────────────────
-            if d['ww'] > 0 and d['vw'] == 0: d['vw'] = d['ww']
-            if d['vw'] > 0 and d['ww'] == 0: d['ww'] = d['vw']
-
-            # ── Fase 7: Saturación S, Vw, Vv ────────────────────────────────
+            # Fase 6: Saturación
             if d['vw'] > 0 and d['vv'] > 0 and d['s']  == 0: d['s']  = d['vw'] / d['vv']
             if d['s']  > 0 and d['vv'] > 0 and d['vw'] == 0: d['vw'] = d['s']  * d['vv']
-            if d['s']  > 0 and d['vw'] > 0 and d['vv'] == 0: d['vv'] = d['vw'] / d['s']
 
-            # ── Fase 8: Relación fundamental  w = S·e/Gs ─────────────────────
-            if d['gs'] > 0 and d['s'] > 0 and d['e'] > 0 and d['w'] == 0:
-                d['w'] = (d['s'] * d['e']) / d['gs']
-            if d['gs'] > 0 and d['w'] > 0 and d['e'] > 0 and d['s'] == 0:
-                d['s'] = (d['w'] * d['gs']) / d['e']
-            if d['gs'] > 0 and d['w'] > 0 and d['s'] > 0 and d['e'] == 0:
-                d['e'] = (d['w'] * d['gs']) / d['s']
-            if d['w'] > 0 and d['s'] > 0 and d['e'] > 0 and d['gs'] == 0:
-                d['gs'] = (d['s'] * d['e']) / d['w']
-
-            # ── Fase 9: Peso total Wm = Ws + Ww ──────────────────────────────
-            if d['wm'] > 0 and d['ws'] > 0 and d['ww'] == 0: d['ww'] = d['wm'] - d['ws']
-            if d['wm'] > 0 and d['ww'] > 0 and d['ws'] == 0: d['ws'] = d['wm'] - d['ww']
-            if d['ws'] > 0 and d['ww'] > 0 and d['wm'] == 0: d['wm'] = d['ws'] + d['ww']
-
-            # ── Fase 10: Volumen de aire Va = Vv - Vw ────────────────────────
-            if d['vv'] > 0 and d['vw'] > 0 and d['va'] == 0: d['va'] = max(0.0, d['vv'] - d['vw'])
-            if d['vv'] > 0 and d['va'] > 0 and d['vw'] == 0: d['vw'] = d['vv'] - d['va']
-            if d['vw'] > 0 and d['va'] > 0 and d['vv'] == 0: d['vv'] = d['vw'] + d['va']
-
-            # ── Fase 11: Pesos unitarios γ (usando γw = 1 g/cm³ = 9.81 kN/m³)─
+            # Fase 7: Pesos Unitarios
             if d['wm'] > 0 and d['vt'] > 0 and d['gh'] == 0: d['gh'] = d['wm'] / d['vt']
-            if d['gh'] > 0 and d['vt'] > 0 and d['wm'] == 0: d['wm'] = d['gh'] * d['vt']
-            if d['gh'] > 0 and d['wm'] > 0 and d['vt'] == 0: d['vt'] = d['wm'] / d['gh']
-
             if d['ws'] > 0 and d['vt'] > 0 and d['gd'] == 0: d['gd'] = d['ws'] / d['vt']
-            if d['gd'] > 0 and d['vt'] > 0 and d['ws'] == 0: d['ws'] = d['gd'] * d['vt']
-            if d['gd'] > 0 and d['ws'] > 0 and d['vt'] == 0: d['vt'] = d['ws'] / d['gd']
-
-            # ── Fase 12: Relación γd = γh / (1 + w) ─────────────────────────
-            if d['gh'] > 0 and d['w'] > 0 and d['gd'] == 0:
-                d['gd'] = d['gh'] / (1 + d['w'])
-            if d['gd'] > 0 and d['w'] > 0 and d['gh'] == 0:
-                d['gh'] = d['gd'] * (1 + d['w'])
-            if d['gh'] > 0 and d['gd'] > 0 and d['gh'] > d['gd'] and d['w'] == 0:
-                d['w'] = (d['gh'] / d['gd']) - 1
+            
+            # Aire
+            if d['vv'] > 0 and d['vw'] > 0: d['va'] = max(0.0, d['vv'] - d['vw'])
+            if d['ws'] > 0 and d['ww'] > 0: d['wm'] = d['ws'] + d['ww']
 
         st.session_state.base_calc = d.copy()
         st.session_state.slider_key = np.random.randint(1, 999)
@@ -143,62 +108,59 @@ with tabs[0]:
         sk = st.session_state.slider_key
 
         with c_sim:
-            st.subheader("🕹️ 2. Simulador")
+            st.subheader("🕹️ 2. Simulador de Ajuste")
             
-            e_def = float(bc['e'])
-            w_def = float(bc['w'] * 100)
-            s_def = float(bc['s'] * 100)
-            ws_def = float(bc['ws'])
-            if ws_def == 0 and bc['wm'] > 0: ws_def = bc['wm'] / (1 + bc['w'])
+            # Valores por defecto para sliders
+            e_def = float(bc['e']) if bc['e'] > 0 else 0.6
+            w_def = float(bc['w'] * 100) if bc['w'] > 0 else 15.0
+            s_def = float(bc['s'] * 100) if bc['s'] > 0 else 50.0
+            ws_def = float(bc['ws']) if bc['ws'] > 0 else 100.0
             
-            errores = []
-            if e_def == 0: errores.append("Relación de vacíos (e)")
-            if ws_def == 0 and modo == "Metas (Laboratorio)": errores.append("Peso de Sólidos (Ws)")
+            e_val = st.slider("Ajustar e", 0.1, 3.0, e_def, key=f"sl_e_{sk}")
+            s_val = st.slider("Ajustar Saturación (S %)", 0.0, 100.0, s_def, key=f"sl_s_{sk}") / 100
+            ws_val = st.number_input("Peso Sólidos (Ws) [g]", value=ws_def, key=f"sl_ws_{sk}")
             
-            if errores:
-                st.error(f"⚠️ **Faltan datos:** No se pudo deducir {', '.join(errores)}.")
-
-            e_val = st.slider("Relación de vacíos (e)", 0.0, 5.0, e_def, key=f"sl_e_{sk}")
-            w_val = st.slider("Humedad (w %)", 0.0, 100.0, w_def, key=f"sl_w_{sk}") / 100
-            s_val = st.slider("Saturación (S %)", 0.0, 100.0, s_def, key=f"sl_s_{sk}") / 100
-            ws_val = st.slider("Peso Sólidos (Ws)", 0.0, 5000.0, ws_def, key=f"sl_ws_{sk}")
-            
-            # Recálculo Final basado en Sliders
+            # Recálculo dinámico
             f = {k: 0.0 for k in diccionario_maestro.keys()}
             f['gs'] = bc['gs'] if bc['gs'] > 0 else 2.65
             f['e'], f['ws'] = e_val, ws_val
-            
-            if modo == "Académico (Base Vs=1)":
-                f['vs'] = 1.0
-                f['ws'] = f['gs'] * f['vs']
-            else:
-                f['vs'] = f['ws'] / f['gs'] if f['gs'] > 0 else 0
-            
+            f['vs'] = f['ws'] / f['gs']
             f['vv'] = f['e'] * f['vs']
-            
-            if s_val > 0:
-                f['s'], f['vw'] = s_val, s_val * f['vv']
-                f['ww'] = f['vw']
-                f['w'] = f['ww'] / f['ws'] if f['ws'] > 0 else 0
-            else:
-                f['w'], f['ww'] = w_val, f['ws'] * w_val
-                f['vw'] = f['ww']
-                f['s'] = f['vw'] / f['vv'] if f['vv'] > 0 else 0
+            f['s'] = s_val
+            f['vw'] = f['s'] * f['vv']
+            f['ww'] = f['vw']
+            f['w'] = f['ww'] / f['ws'] if f['ws'] > 0 else 0
+            f['vt'] = f['vs'] + f['vv']
+            f['va'] = max(0.0, f['vv'] - f['vw'])
+            f['wm'] = f['ws'] + f['ww']
+            f['n'] = f['vv'] / f['vt']
 
-            f['vt'], f['va'] = f['vs'] + f['vv'], max(0.0, f['vv'] - f['vw'])
-            f['wm'], f['n'] = f['ws'] + f['ww'], (f['vv'] / (f['vs'] + f['vv']) if (f['vs'] + f['vv']) > 0 else 0)
-
-            if st.button("🔄 Reiniciar"):
+            if st.button("🔄 Limpiar Todo"):
                 del st.session_state.base_calc
                 st.rerun()
 
         with c_res:
-            st.subheader("📊 Resultados")
-            gamma_h = (f['wm']/f['vt'])*9.81 if f['vt'] > 0 else 0
-            gamma_d = (f['ws']/f['vt'])*9.81 if f['vt'] > 0 else 0
-            res_df = pd.DataFrame({"Propiedad": list(diccionario_maestro.values()), 
-                "Valor": [f"{f['gs']:.3f}", f"{f['e']:.4f}", f"{f['n']*100:.2f}%", f"{f['w']*100:.2f}%", f"{f['s']*100:.2f}%", f"{f['wm']:.2f} g", f"{f['ws']:.2f} g", f"{f['ww']:.2f} g", f"{f['vt']:.2f} cm³", f"{f['vs']:.2f} cm³", f"{f['vv']:.2f} cm³", f"{f['vw']:.2f} cm³", f"{f['va']:.2f} cm³", f"{gamma_h:.2f} kN/m³", f"{gamma_d:.2f} kN/m³"]})
+            st.subheader("📊 Resultados Finales")
+            gamma_h = (f['wm']/f['vt']) * 9.81 if f['vt'] > 0 else 0
+            gamma_d = (f['ws']/f['vt']) * 9.81 if f['vt'] > 0 else 0
+            
+            res_df = pd.DataFrame({
+                "Propiedad": list(diccionario_maestro.values()), 
+                "Valor": [
+                    f"{f['gs']:.3f}", f"{f['e']:.4f}", f"{f['n']*100:.2f}%", 
+                    f"{f['w']*100:.2f}%", f"{f['s']*100:.2f}%", f"{f['wm']:.2f} g", 
+                    f"{f['ws']:.2f} g", f"{f['ww']:.2f} g", f"{f['vt']:.2f} cm³", 
+                    f"{f['vs']:.2f} cm³", f"{f['vv']:.2f} cm³", f"{f['vw']:.2f} cm³", 
+                    f"{f['va']:.2f} cm³", f"{gamma_h:.2f} kN/m³", f"{gamma_d:.2f} kN/m³"
+                ]
+            })
             st.table(res_df)
-            st.session_state.df_excel = res_df
-            fig = go.Figure(data=[go.Bar(name='Sólidos', x=['Fases'], y=[f['vs']], marker_color='#7E5109'), go.Bar(name='Agua', x=['Fases'], y=[f['vw']], marker_color='#3498DB'), go.Bar(name='Aire', x=['Fases'], y=[f['va']], marker_color='#BDC3C7')])
-            fig.update_layout(barmode='stack', height=350); st.plotly_chart(fig, use_container_width=True)
+            
+            # Gráfico de Fases
+            fig = go.Figure(data=[
+                go.Bar(name='Sólidos', x=['Fases'], y=[f['vs']], marker_color='#7E5109'),
+                go.Bar(name='Agua', x=['Fases'], y=[f['vw']], marker_color='#3498DB'),
+                go.Bar(name='Aire', x=['Fases'], y=[f['va']], marker_color='#BDC3C7')
+            ])
+            fig.update_layout(barmode='stack', height=300, margin=dict(t=20, b=20))
+            st.plotly_chart(fig, use_container_width=True)
